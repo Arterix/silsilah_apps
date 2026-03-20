@@ -11,5 +11,5 @@ Repository project aplikasi Silsilah Keluarga
 
 ## Documentation
 
-Aplikasi ini masih dalam tahap pengembangan
+Aplikasi ini menggunakan flutter dan masih dalam tahap pengembangan.
 
