@@ -2,13 +2,17 @@ import 'package:flutter/foundation.dart';
 import '../models/family_member.dart';
 import '../services/storage_service.dart';
 import '../services/firestore_service.dart';
+import 'dart:async';
 
 class FamilyProvider extends ChangeNotifier {
   final StorageService _storage = StorageService();
+  final FirestoreService _firestore = FirestoreService();
 
   List<FamilyMember> _members = [];
   bool _isLoading = false;
   String? _error;
+
+  StreamSubscription? _sub;
 
   List<FamilyMember> get members => _members;
   bool get isLoading => _isLoading;
@@ -44,11 +48,49 @@ class FamilyProvider extends ChangeNotifier {
     notifyListeners();
     try {
       _members = await _storage.loadMembers();
-    } catch (e) {
-      _error = e.toString();
-    }
+      if (_members.isNotEmpty) notifyListeners();
+    } catch (_) {}
+
+    // Aktifkan real-time listener ke Firestore
+    _startListening();
+
     _isLoading = false;
     notifyListeners();
+  }
+
+  // Listener ini berjalan terus selama app hidup.
+  void _startListening() {
+    _sub?.cancel(); // batalkan listener lama jika ada
+
+    _sub = _firestore.membersStream().listen(
+      (remoteMembers) async {
+        if (remoteMembers.isNotEmpty) {
+          _members = remoteMembers;
+          // Sync ke lokal untuk offline access
+          await _storage.saveMembers(_members);
+          notifyListeners();
+        } else if (_members.isEmpty) {
+          // Firestore kosong, coba ambil dari lokal (migrasi data lama)
+          _members = await _storage.loadMembers();
+          if (_members.isNotEmpty) {
+            await _firestore.saveAllMembers(_members);
+          }
+          notifyListeners();
+        }
+      },
+      onError: (e) {
+        // Koneksi gagal, pakai data lokal yang sudah ada
+        _error = e.toString();
+        notifyListeners();
+      },
+    );
+  }
+
+  // Hentikan listener saat provider di-dispose
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
   }
 
   // ── CRUD ────────────────────────────────────────────────────────
@@ -71,13 +113,10 @@ class FamilyProvider extends ChangeNotifier {
     await _persist();
   }
 
-  /// Cascade delete: hapus member beserta semua turunannya.
-  /// Partner (isPartnerNode) juga ikut dihapus jika ada.
   Future<void> deleteMember(String id) async {
     final idsToDelete = <String>{};
     _collectDescendants(id, idsToDelete);
 
-    // Hapus partner jika isPartnerNode
     for (final deleteId in List<String>.from(idsToDelete)) {
       final m = getById(deleteId);
       if (m?.partnerId != null) {
@@ -111,7 +150,10 @@ class FamilyProvider extends ChangeNotifier {
       }
     }
 
-    _members.removeWhere((m) => idsToDelete.contains(m.id));
+    try {
+      await _firestore.deleteMembers(idsToDelete.toList());
+    } catch (_) {}
+
     await _persist();
   }
 
@@ -146,6 +188,9 @@ class FamilyProvider extends ChangeNotifier {
     final partner = getById(member!.partnerId!);
     if (partner != null && partner.isPartnerNode) {
       if (partner.photoPath != null) await _storage.deletePhoto(partner.id);
+      try {
+        await _firestore.deleteMembers([partner.id]);
+      } catch (_) {}
       _members.removeWhere((m) => m.id == partner.id);
     }
 
@@ -214,6 +259,11 @@ class FamilyProvider extends ChangeNotifier {
   Future<void> replaceAllData(String filePath) async {
     final imported = await _storage.importFromFile(filePath);
     _members = imported;
+
+    try {
+      await _firestore.deleteAllMembers();
+    } catch (_) {}
+
     await _persist();
   }
 
@@ -225,8 +275,11 @@ class FamilyProvider extends ChangeNotifier {
   // ── Persist ─────────────────────────────────────────────────────
 
   Future<void> _persist() async {
-    await _storage.saveMembers(_members);
-    notifyListeners();
-  }
+  await _storage.saveMembers(_members);
+  try {
+    await _firestore.saveAllMembers(_members);
+  } catch (_) {}
+  notifyListeners();
+}
 }
 

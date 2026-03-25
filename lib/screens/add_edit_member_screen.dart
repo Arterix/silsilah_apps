@@ -210,7 +210,7 @@ class _AddEditMemberScreenState extends State<AddEditMemberScreen> {
                           ? FileImage(File(_photoPath!))
                           : null,
                       child: _photoPath == null
-                          ? Icon(Icons.person, size: 54, color: accent)
+                          ? const Icon(Icons.person, size: 54, color: accent)
                           : null,
                     ),
                     Container(
@@ -239,7 +239,7 @@ class _AddEditMemberScreenState extends State<AddEditMemberScreen> {
                     borderRadius: BorderRadius.circular(12)),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: accent, width: 2),
+                  borderSide: const BorderSide(color: accent, width: 2),
                 ),
               ),
               validator: (v) =>
@@ -258,7 +258,7 @@ class _AddEditMemberScreenState extends State<AddEditMemberScreen> {
                     borderRadius: BorderRadius.circular(12)),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: accent, width: 2),
+                  borderSide: const BorderSide(color: accent, width: 2),
                 ),
                 alignLabelWithHint: true,
               ),
