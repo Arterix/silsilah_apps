@@ -3,11 +3,6 @@
 
 Repository project aplikasi Silsilah Keluarga
 
-## Authors
-
-- [Bening R](https://www.github.com/Arterix)
-- Titan
-
 
 ## Documentation
 

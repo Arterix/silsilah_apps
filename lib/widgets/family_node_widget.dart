@@ -7,50 +7,94 @@ import '../providers/family_provider.dart';
 import '../screens/add_edit_member_screen.dart';
 import '../screens/member_detail_screen.dart';
 
-// ── Konstanta Layout ──────────────────────────────────────────────────────
-const double _kNodeWidth    = 110.0;
-const double _kNodeGap      = 24.0;
-const double _kCoupleLineH  = 24.0; // panjang garis menikah
-const double _kPlusSize     = 32.0;
-const double _kVLineH       = 20.0;
+// ── Layout constants ──────────────────────────────────────────────────────
+const double _kNodeW       = 110.0;
+const double _kNodeGap     = 24.0;
+const double _kCoupleLineW = 28.0;
+const double _kCardRowH    = 120.0;
+const double _kAddRowH     = 36.0;
+const double _kConnH       = 52.0;
+const double _kStemY       = 22.0;
+const double _kPlusSize    = 28.0;
 
-// ── Metrics: (subtreeWidth, anchorX) ─────────────────────────────────────
-// anchorX = posisi horizontal tengah node utama di dalam subtreenya
-(double, double) _metrics(FamilyMember m, FamilyProvider p) {
-  final children   = p.getChildren(m.id);
-  final hasPartner = p.getPartner(m) != null;
+// ═════════════════════════════════════════════════════════════════════════
+// Internal tree node
+// ═════════════════════════════════════════════════════════════════════════
+class _TNode {
+  final FamilyMember member;
+  final FamilyMember? partner;
+  final List<_TNode> children;
 
-  double ctw = 0; // children total width
-  if (children.isNotEmpty) {
-    ctw = children.fold(0.0, (a, c) => a + _metrics(c, p).$1) +
-          (children.length - 1) * _kNodeGap;
-  }
+  double slotW    = 0;
+  double unitOffX = 0;
 
-  if (!hasPartner) {
-    final w = max(_kNodeWidth, ctw);
-    return (w, w / 2);
-  }
+  _TNode(this.member, this.partner, this.children);
 
-  // Dengan pasangan: node utama di kiri, pasangan di kanan
-  // anchor = leftSpace (tengah node utama)
-  final leftSpace  = max(_kNodeWidth / 2, ctw / 2);
-  const rightSpace = _kNodeWidth / 2 + _kCoupleLineH + _kNodeWidth;
-  return (leftSpace + rightSpace, leftSpace);
+  double get unitW =>
+      partner != null ? _kNodeW + _kCoupleLineW + _kNodeW : _kNodeW;
+
+  double get anchorInSlot => unitOffX + unitW / 2;
 }
 
-// ── Helper: posisikan child dengan center di posisi cx dalam container sw ─
-Widget _cx(double sw, double cx, double childW, Widget child) {
-  final left = max(0.0, cx - childW / 2);
-  return SizedBox(
-    width: sw,
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [SizedBox(width: left), child],
-    ),
-  );
+// ── Gen entry ─────────────────────────────────────────────────────────────
+class _GEntry {
+  final _TNode node;
+  final double absX;
+  final String? parentId;
+
+  _GEntry(this.node, this.absX, [this.parentId]);
+
+  double get anchorAbs => absX + node.anchorInSlot;
+  double get unitLeft  => absX + node.unitOffX;
 }
 
+// ── Build tree ───────────────────────────────────────────────────────────
+_TNode _buildTree(FamilyMember m, FamilyProvider p) {
+  final partner  = p.getPartner(m);
+  final children = p.getChildren(m.id).map((c) => _buildTree(c, p)).toList();
+  return _TNode(m, partner, children);
+}
+
+// ── Compute slot widths bottom-up ─────────────────────────────────────────
+void _computeSlots(_TNode n) {
+  for (final c in n.children) _computeSlots(c);
+
+  if (n.children.isEmpty) {
+    n.slotW    = n.unitW;
+    n.unitOffX = 0;
+  } else {
+    final cw = n.children.fold(0.0, (s, c) => s + c.slotW)
+               + (n.children.length - 1) * _kNodeGap;
+    n.slotW    = max(n.unitW, cw);
+    n.unitOffX = (n.slotW - n.unitW) / 2;
+  }
+}
+
+// ── BFS: collect per-generation entries with absolute X ──────────────────
+List<List<_GEntry>> _toGens(_TNode root) {
+  final gens = <List<_GEntry>>[];
+  var cur = [_GEntry(root, 0, null)];
+
+  while (cur.isNotEmpty) {
+    gens.add(cur);
+    final next = <_GEntry>[];
+    for (final e in cur) {
+      if (e.node.children.isEmpty) continue;
+      final cw = e.node.children.fold(0.0, (s, c) => s + c.slotW)
+                 + (e.node.children.length - 1) * _kNodeGap;
+      double cx = e.absX + (e.node.slotW - cw) / 2;
+      for (final child in e.node.children) {
+        next.add(_GEntry(child, cx, e.node.member.id));
+        cx += child.slotW + _kNodeGap;
+      }
+    }
+    cur = next;
+  }
+  return gens;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// FamilyNodeWidget
 // ══════════════════════════════════════════════════════════════════════════
 class FamilyNodeWidget extends StatelessWidget {
   final FamilyMember member;
@@ -58,146 +102,37 @@ class FamilyNodeWidget extends StatelessWidget {
 
   const FamilyNodeWidget({super.key, required this.member, this.depth = 0});
 
-  Color _lineColor(BuildContext ctx) {
-    return Theme.of(ctx).brightness == Brightness.dark
-        ? const Color(0xFF7986CB)
-        : const Color(0xFF3949AB);
-  }
+  Color _lc(BuildContext ctx) =>
+      Theme.of(ctx).brightness == Brightness.dark
+          ? const Color(0xFF7986CB)
+          : const Color(0xFF3949AB);
 
   @override
   Widget build(BuildContext context) {
-    final p       = context.watch<FamilyProvider>();
-    final partner = p.getPartner(member);
-    final children = p.getChildren(member.id);
-    final (sw, ax) = _metrics(member, p);
-    final lc = _lineColor(context);
-
-    // Per-child metrics
-    final cm = children.map((c) {
-      final (w, a) = _metrics(c, p);
-      return (c, w, a); // (member, subtreeW, anchorX)
-    }).toList();
-
-    final ctw = cm.isEmpty
-        ? 0.0
-        : cm.fold<double>(0.0, (a, x) => a + x.$2) +
-          (cm.length - 1) * _kNodeGap;
+    final p    = context.watch<FamilyProvider>();
+    final lc   = _lc(context);
+    final root = _buildTree(member, p);
+    _computeSlots(root);
+    final gens = _toGens(root);
+    final w    = root.slotW;
 
     return SizedBox(
-      width: sw,
+      width: w,
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // ── Node utama + pasangan ────────────────────────────
-          _buildNodeRow(context, partner, ax, sw, lc),
-
-          // ── Tombol + tambah anak (di bawah node utama) ───────
-          _cx(sw, ax, _kPlusSize,
-              _AddChildButton(parentId: member.id, lineColor: lc)),
-
-          // ── Children subtree ─────────────────────────────────
-          if (cm.isNotEmpty) ...[
-            _cx(sw, ax, 2.5,
-                Container(width: 2.5, height: _kVLineH, color: lc)),
-            if (cm.length > 1)
-              _buildHConnector(sw, ax, cm, ctw, lc),
-            _buildChildrenRow(sw, ax, cm, ctw, lc),
-          ],
-        ],
-      ),
-    );
-  }
-
-  // ── Baris node + opsional pasangan ──────────────────────────────────────
-  Widget _buildNodeRow(
-    BuildContext context,
-    FamilyMember? partner,
-    double ax,
-    double sw,
-    Color lc,
-  ) {
-    final nodeLeft = max(0.0, ax - _kNodeWidth / 2);
-    return SizedBox(
-      width: sw,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          SizedBox(width: nodeLeft),
-          _NodeCard(member: member, depth: depth),
-          if (partner != null) ...[
-            Container(width: _kCoupleLineH, height: 2.5, color: lc),
-            _NodeCard(member: partner, depth: depth, isPartner: true),
-          ],
-        ],
-      ),
-    );
-  }
-
-  // ── Garis horizontal penghubung anchor tiap anak ───────────────────────
-  Widget _buildHConnector(
-    double sw,
-    double ax,
-    List<(FamilyMember, double, double)> cm,
-    double ctw,
-    Color lc,
-  ) {
-    final rowLeft = ax - ctw / 2;
-    final startX  = rowLeft + cm.first.$3;
-    double xOff   = 0;
-    for (int i = 0; i < cm.length - 1; i++) {
-      xOff += cm[i].$2 + _kNodeGap;
-    }
-    final endX = rowLeft + xOff + cm.last.$3;
-
-    return SizedBox(
-      width: sw,
-      height: 2.5,
-      child: CustomPaint(
-          painter: _HLinePainter(startX: startX, endX: endX, color: lc)),
-    );
-  }
-
-  // ── Deretan anak dengan VLine per anak ────────────────────────────────
-  Widget _buildChildrenRow(
-    double sw,
-    double ax,
-    List<(FamilyMember, double, double)> cm,
-    double ctw,
-    Color lc,
-  ) {
-    final rowLeft = ax - ctw / 2;
-    return SizedBox(
-      width: sw,
-      child: Row(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(width: rowLeft),
-          ...List.generate(cm.length, (i) {
-            final (child, cw, cax) = cm[i];
-            return Row(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (i > 0) const SizedBox(width: _kNodeGap),
-                SizedBox(
-                  width: cw,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // VLine di anchor anak
-                      _cx(cw, cax, 2.5,
-                          Container(width: 2.5, height: _kVLineH, color: lc)),
-                      FamilyNodeWidget(member: child, depth: depth + 1),
-                    ],
-                  ),
-                ),
-              ],
-            );
-          }),
+          for (int i = 0; i < gens.length; i++) ...[
+            _GenCardsRow(entries: gens[i], totalW: w, genDepth: i, lc: lc),
+            _GenAddRow(entries: gens[i], totalW: w, lc: lc),
+            if (i < gens.length - 1)
+              _ConnectorRow(
+                parents:  gens[i],
+                children: gens[i + 1],
+                totalW:   w,
+                lc:       lc,
+              ),
+          ],
         ],
       ),
     );
@@ -205,33 +140,238 @@ class FamilyNodeWidget extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// Node Card
+// _GenCardsRow — all cards for one generation, positioned by absolute X
+// ══════════════════════════════════════════════════════════════════════════
+class _GenCardsRow extends StatelessWidget {
+  final List<_GEntry> entries;
+  final double totalW;
+  final int genDepth;
+  final Color lc;
+
+  const _GenCardsRow({
+    required this.entries,
+    required this.totalW,
+    required this.genDepth,
+    required this.lc,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width:  totalW,
+      height: _kCardRowH,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          for (final e in entries)
+            Positioned(
+              left: e.unitLeft,
+              top:  0,
+              child: _UnitWidget(
+                main:    e.node.member,
+                partner: e.node.partner,
+                lc:      lc,
+                depth:   genDepth,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// _GenAddRow — "+" buttons at each node's anchor X
+// ══════════════════════════════════════════════════════════════════════════
+class _GenAddRow extends StatelessWidget {
+  final List<_GEntry> entries;
+  final double totalW;
+  final Color lc;
+
+  const _GenAddRow({
+    required this.entries,
+    required this.totalW,
+    required this.lc,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width:  totalW,
+      height: _kAddRowH,
+      child: Stack(
+        children: [
+          for (final e in entries)
+            Positioned(
+              left: e.anchorAbs - _kPlusSize / 2,
+              top:  4,
+              child: _AddChildButton(
+                parentId:  e.node.member.id,
+                lineColor: lc,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// _ConnectorRow — draws connector lines between two generations
+// ══════════════════════════════════════════════════════════════════════════
+class _ConnectorRow extends StatelessWidget {
+  final List<_GEntry> parents;
+  final List<_GEntry> children;
+  final double totalW;
+  final Color lc;
+
+  const _ConnectorRow({
+    required this.parents,
+    required this.children,
+    required this.totalW,
+    required this.lc,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final Map<String, List<_GEntry>> byParent = {};
+    for (final c in children) {
+      if (c.parentId != null) {
+        byParent.putIfAbsent(c.parentId!, () => []).add(c);
+      }
+    }
+
+    final specs = <_LineSpec>[];
+
+    for (final p in parents) {
+      final kids = byParent[p.node.member.id];
+      if (kids == null || kids.isEmpty) continue;
+
+      final px = p.anchorAbs;
+
+      if (kids.length == 1) {
+        final cx = kids.first.anchorAbs;
+        if ((px - cx).abs() < 1.0) {
+          specs.add(_LineSpec(px, 0, px, _kConnH));
+        } else {
+          specs.add(_LineSpec(px, 0, px, _kStemY));
+          specs.add(_LineSpec(px, _kStemY, cx, _kStemY));
+          specs.add(_LineSpec(cx, _kStemY, cx, _kConnH));
+        }
+      } else {
+        final firstCx = kids.first.anchorAbs;
+        final lastCx  = kids.last.anchorAbs;
+
+        specs.add(_LineSpec(px, 0, px, _kStemY));
+        specs.add(_LineSpec(firstCx, _kStemY, lastCx, _kStemY));
+        for (final kid in kids) {
+          specs.add(_LineSpec(kid.anchorAbs, _kStemY, kid.anchorAbs, _kConnH));
+        }
+      }
+    }
+
+    return SizedBox(
+      width:  totalW,
+      height: _kConnH,
+      child: CustomPaint(
+        painter: _LinePainter(specs: specs, color: lc),
+      ),
+    );
+  }
+}
+
+class _LineSpec {
+  final double x1, y1, x2, y2;
+  const _LineSpec(this.x1, this.y1, this.x2, this.y2);
+}
+
+class _LinePainter extends CustomPainter {
+  final List<_LineSpec> specs;
+  final Color color;
+
+  const _LinePainter({required this.specs, required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color       = color
+      ..strokeWidth = 2.5
+      ..strokeCap   = StrokeCap.round;
+    for (final s in specs) {
+      canvas.drawLine(Offset(s.x1, s.y1), Offset(s.x2, s.y2), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _LinePainter old) =>
+      old.specs != specs || old.color != color;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// _UnitWidget — main card + optional partner card
+// ══════════════════════════════════════════════════════════════════════════
+class _UnitWidget extends StatelessWidget {
+  final FamilyMember main;
+  final FamilyMember? partner;
+  final Color lc;
+  final int depth;
+
+  const _UnitWidget({
+    required this.main,
+    required this.partner,
+    required this.lc,
+    required this.depth,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        _NodeCard(member: main, depth: depth),
+        if (partner != null) ...[
+          Container(
+            width:  _kCoupleLineW,
+            height: 2.5,
+            decoration: BoxDecoration(
+              color:        lc,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          _NodeCard(member: partner!, depth: depth, isPartner: true),
+        ],
+      ],
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// _NodeCard
 // ══════════════════════════════════════════════════════════════════════════
 class _NodeCard extends StatelessWidget {
   final FamilyMember member;
   final int depth;
   final bool isPartner;
 
-  const _NodeCard({required this.member, required this.depth, this.isPartner = false});
+  const _NodeCard({
+    required this.member,
+    required this.depth,
+    this.isPartner = false,
+  });
 
   Color _accent(BuildContext ctx) {
     final isDark = Theme.of(ctx).brightness == Brightness.dark;
     if (isPartner) {
       return isDark ? const Color(0xFFCE93D8) : const Color(0xFF8E24AA);
     }
-    final light = [
-      const Color(0xFF1A237E),
-      const Color(0xFF283593),
-      const Color(0xFF303F9F),
-      const Color(0xFF3949AB),
-      const Color(0xFF5C6BC0),
+    const light = [
+      Color(0xFF1A237E), Color(0xFF283593),
+      Color(0xFF303F9F), Color(0xFF3949AB), Color(0xFF5C6BC0),
     ];
-    final dark = [
-      const Color(0xFF7986CB),
-      const Color(0xFF9FA8DA),
-      const Color(0xFF5C6BC0),
-      const Color(0xFF7986CB),
-      const Color(0xFF9FA8DA),
+    const dark = [
+      Color(0xFF7986CB), Color(0xFF9FA8DA),
+      Color(0xFF5C6BC0), Color(0xFF7986CB), Color(0xFF9FA8DA),
     ];
     return (isDark ? dark : light)[depth.clamp(0, 4)];
   }
@@ -244,23 +384,21 @@ class _NodeCard extends StatelessWidget {
     final cardBg   = isDark ? const Color(0xFF1E1E2E) : Colors.white;
 
     return GestureDetector(
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => MemberDetailScreen(member: member)),
-      ),
+      onTap: () => Navigator.push(context,
+          MaterialPageRoute(builder: (_) => MemberDetailScreen(member: member))),
       onLongPress: () => _showOptions(context, provider),
       child: Container(
-        width: _kNodeWidth,
+        width:   _kNodeW,
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: cardBg,
+          color:        cardBg,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: accent, width: 2),
+          border:       Border.all(color: accent, width: 2),
           boxShadow: [
             BoxShadow(
-              color: accent.withOpacity(isDark ? 0.25 : 0.15),
+              color:      accent.withOpacity(isDark ? 0.25 : 0.15),
               blurRadius: 8,
-              offset: const Offset(0, 3),
+              offset:     const Offset(0, 3),
             ),
           ],
         ),
@@ -268,10 +406,11 @@ class _NodeCard extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             CircleAvatar(
-              radius: 28,
+              radius:          28,
               backgroundColor: accent.withOpacity(0.15),
-              backgroundImage:
-                  member.photoPath != null ? FileImage(File(member.photoPath!)) : null,
+              backgroundImage: member.photoPath != null
+                  ? FileImage(File(member.photoPath!))
+                  : null,
               child: member.photoPath == null
                   ? Icon(Icons.person, color: accent, size: 28)
                   : null,
@@ -280,10 +419,13 @@ class _NodeCard extends StatelessWidget {
             Text(
               member.name,
               textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
+              maxLines:  2,
+              overflow:  TextOverflow.ellipsis,
               style: TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w600, color: accent),
+                fontSize:   12,
+                fontWeight: FontWeight.w600,
+                color:      accent,
+              ),
             ),
           ],
         ),
@@ -303,26 +445,26 @@ class _NodeCard extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: 40, height: 4,
+                width:  40,
+                height: 4,
                 margin: const EdgeInsets.only(bottom: 16),
                 decoration: BoxDecoration(
-                    color: Colors.grey[400],
+                    color:        Colors.grey[400],
                     borderRadius: BorderRadius.circular(2)),
               ),
               ListTile(
                 leading: const Icon(Icons.edit, color: Color(0xFF1A237E)),
-                title: const Text('Edit'),
+                title:   const Text('Edit'),
                 onTap: () {
                   Navigator.pop(bsCtx);
-                  Navigator.push(ctx,
-                      MaterialPageRoute(
-                          builder: (_) => AddEditMemberScreen(existing: member)));
+                  Navigator.push(ctx, MaterialPageRoute(
+                      builder: (_) => AddEditMemberScreen(existing: member)));
                 },
               ),
               if (isPartner)
                 ListTile(
                   leading: const Icon(Icons.link_off, color: Colors.orange),
-                  title: const Text('Hapus Hubungan Pasangan',
+                  title:   const Text('Hapus Hubungan Pasangan',
                       style: TextStyle(color: Colors.orange)),
                   onTap: () {
                     Navigator.pop(bsCtx);
@@ -334,7 +476,7 @@ class _NodeCard extends StatelessWidget {
                 ),
               ListTile(
                 leading: const Icon(Icons.delete, color: Colors.red),
-                title: const Text('Hapus', style: TextStyle(color: Colors.red)),
+                title:   const Text('Hapus', style: TextStyle(color: Colors.red)),
                 onTap: () {
                   Navigator.pop(bsCtx);
                   _confirmDelete(ctx, provider);
@@ -352,7 +494,7 @@ class _NodeCard extends StatelessWidget {
     showDialog(
       context: ctx,
       builder: (dlg) => AlertDialog(
-        title: const Text('Hapus Anggota'),
+        title:   const Text('Hapus Anggota'),
         content: Text(hasChildren
             ? 'Hapus "${member.name}"? Semua anggota di bawahnya juga akan ikut terhapus.'
             : 'Hapus "${member.name}"?'),
@@ -375,7 +517,7 @@ class _NodeCard extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// Tombol + (tambah anak)
+// _AddChildButton
 // ══════════════════════════════════════════════════════════════════════════
 class _AddChildButton extends StatelessWidget {
   final String parentId;
@@ -389,52 +531,20 @@ class _AddChildButton extends StatelessWidget {
     final accent = isDark ? const Color(0xFF7986CB) : const Color(0xFF1A237E);
     final bg     = isDark ? const Color(0xFF1E1E2E) : Colors.white;
 
-    return Padding(
-      padding: const EdgeInsets.only(top: 6),
-      child: GestureDetector(
-        onTap: () => Navigator.push(
-          context,
+    return GestureDetector(
+      onTap: () => Navigator.push(context,
           MaterialPageRoute(
-              builder: (_) => AddEditMemberScreen(parentId: parentId)),
+              builder: (_) => AddEditMemberScreen(parentId: parentId))),
+      child: Container(
+        width:  _kPlusSize,
+        height: _kPlusSize,
+        decoration: BoxDecoration(
+          shape:  BoxShape.circle,
+          border: Border.all(color: accent, width: 2),
+          color:  bg,
         ),
-        child: Container(
-          width: _kPlusSize,
-          height: _kPlusSize,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            border: Border.all(color: accent, width: 2),
-            color: bg,
-          ),
-          child: Icon(Icons.add, size: 18, color: accent),
-        ),
+        child: Icon(Icons.add, size: 14, color: accent),
       ),
     );
   }
-}
-
-// ══════════════════════════════════════════════════════════════════════════
-// Custom painter garis horizontal
-// ══════════════════════════════════════════════════════════════════════════
-class _HLinePainter extends CustomPainter {
-  final double startX;
-  final double endX;
-  final Color color;
-
-  const _HLinePainter({required this.startX, required this.endX, required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    canvas.drawLine(
-      Offset(startX, size.height / 2),
-      Offset(endX, size.height / 2),
-      Paint()
-        ..color = color
-        ..strokeWidth = 2.5
-        ..strokeCap = StrokeCap.round,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _HLinePainter old) =>
-      old.startX != startX || old.endX != endX || old.color != color;
 }
