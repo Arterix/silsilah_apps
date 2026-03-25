@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "292383295028",
+    "project_id": "silsilahapps",
+    "storage_bucket": "silsilahapps.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:292383295028:android:fafc07a9cd330fb33cec61",
+        "android_client_info": {
+          "package_name": "com.example.silsilah_apps"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDDGEbBg-HlZU9tyiJkCppexI7R8E4z02U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
